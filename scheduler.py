@@ -413,9 +413,11 @@ def run_scheduler(scenario: dict[str, Any]) -> list[BusTimeline]:
 # ---------------------------------------------------------------------------
 
 def min_to_hhmm(minutes: float) -> str:
-    h = int(minutes) // 60
+    day = int(minutes) // (24 * 60)
+    h = (int(minutes) % (24 * 60)) // 60
     m = int(minutes) % 60
-    return f"{h:02d}:{m:02d}"
+    suffix = f" (+{day})" if day > 0 else ""
+    return f"{h:02d}:{m:02d}{suffix}"
 
 
 def station_view(timelines: list[BusTimeline]) -> dict[str, list[dict]]:
@@ -436,8 +438,11 @@ def station_view(timelines: list[BusTimeline]) -> dict[str, list[dict]]:
                 "arrive": min_to_hhmm(stop.arrive_min),
                 "wait_min": round(stop.wait_min, 1),
                 "charge_start": min_to_hhmm(stop.start_charge_min),
+                "charge_start_min": stop.start_charge_min,
                 "charge_end": min_to_hhmm(stop.start_charge_min + stop.charge_min),
             })
     for st in result:
-        result[st].sort(key=lambda e: e["charge_start"])
+        result[st].sort(key=lambda e: e["charge_start_min"])
+        for ev in result[st]:
+            del ev["charge_start_min"]
     return result
