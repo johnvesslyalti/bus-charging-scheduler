@@ -420,6 +420,77 @@ def min_to_hhmm(minutes: float) -> str:
     return f"{h:02d}:{m:02d}{suffix}"
 
 
+def audit_plan_flexibility(scenario: dict[str, Any]) -> dict[str, int]:
+    """
+    Replay the scheduling loop and classify each bus's cost-optimal plan.
+
+    Returns a dict with counts:
+      single          — exactly one cost-optimal plan (no equal-cost alternative)
+      tied_identical  — multiple optimal plans, all identical in wait AND trip
+      tied_differing  — multiple optimal plans differing in wait or trip
+                        (the only case in which a soft-rule weight could change
+                        the selection)
+      buses           — total decisions
+
+    This is the source of truth behind the UI "weight sensitivity" panel and the
+    experiments/ audit: a scenario with tied_differing == 0 is weight-invariant,
+    because the weights only re-rank plans within those ties.
+    """
+    phys = scenario["physics"]
+    battery_range = phys["battery_range_km"]
+    segments = [Segment(s["from"], s["to"], s["distance_km"]) for s in scenario["route"]["segments"]]
+    route = Route(
+        origin=scenario["route"]["origin"],
+        destination=scenario["route"]["destination"],
+        segments=segments,
+        speed_kmh=phys["speed_kmh"],
+    )
+    station_chargers = {s["id"]: s.get("chargers", 1) for s in scenario["stations"]}
+    station_timelines: dict[str, list[list[tuple[float, float]]]] = {
+        s: [[] for _ in range(n)] for s, n in station_chargers.items()
+    }
+    buses = []
+    for b in scenario["buses"]:
+        h, m = b["departure"].split(":")
+        buses.append(Bus(b["id"], b["operator"], b["direction"], float(int(h) * 60 + int(m))))
+    buses.sort(key=lambda b: b.departure_min)
+
+    counts = {"single": 0, "tied_identical": 0, "tied_differing": 0, "buses": len(buses)}
+    for bus in buses:
+        cands = []
+        for plan in enumerate_valid_plans(bus, route, battery_range):
+            merged = {st: sorted(s for slots in cs for s in slots) for st, cs in station_timelines.items()}
+            stops = allocate_slots(plan, bus, route, phys, merged)
+            if stops is None:
+                continue
+            arrival = compute_arrival(bus, stops, route)
+            wait = sum(s.wait_min for s in stops)
+            trip = arrival - bus.departure_min
+            cands.append((wait + trip, wait, trip, stops))
+        best = min(c[0] for c in cands)
+        winners = [c for c in cands if abs(c[0] - best) < 1e-9]
+        if len(winners) == 1:
+            counts["single"] += 1
+        elif len({round(c[1], 6) for c in winners}) == 1 and len({round(c[2], 6) for c in winners}) == 1:
+            counts["tied_identical"] += 1
+        else:
+            counts["tied_differing"] += 1
+        # commit the first winner (matches run_scheduler's strict-< tie behaviour)
+        for stop in winners[0][3]:
+            start = stop.start_charge_min
+            end = start + stop.charge_min
+            placed = False
+            for slots in station_timelines[stop.station]:
+                latest = max((s[1] for s in slots), default=0.0)
+                if start >= latest:
+                    slots.append((start, end))
+                    placed = True
+                    break
+            if not placed:
+                station_timelines[stop.station][0].append((start, end))
+    return counts
+
+
 def station_view(timelines: list[BusTimeline]) -> dict[str, list[dict]]:
     """
     Returns per-station ordered list of charging events, sorted by charge start time.

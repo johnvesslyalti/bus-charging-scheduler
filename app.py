@@ -9,7 +9,7 @@ import glob
 import yaml
 import streamlit as st
 import pandas as pd
-from scheduler import run_scheduler, min_to_hhmm, station_view
+from scheduler import run_scheduler, min_to_hhmm, station_view, audit_plan_flexibility
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -109,6 +109,30 @@ with tab_input:
             f"- **operator** (fleet fairness penalty): `{w.get('operator', 1.0)}`  \n"
             f"- **overall** (total trip time penalty): `{w.get('overall', 1.0)}`  "
         )
+
+        with st.expander("🔎 Weight sensitivity for this scenario"):
+            flex = audit_plan_flexibility(scenario)
+            invariant = flex["tied_differing"] == 0
+            if invariant:
+                st.markdown(
+                    f"**This scenario's schedule is invariant to all soft-rule weights.**  \n"
+                    f"Of {flex['buses']} bus decisions:"
+                )
+            else:
+                st.markdown(
+                    f"**{flex['tied_differing']} of {flex['buses']} bus decisions are "
+                    f"weight-sensitive** — changing a weight can change this schedule."
+                )
+            st.markdown(
+                f"- `{flex['single']}` single optimal plan — no cost-equal alternative  \n"
+                f"- `{flex['tied_identical']}` tied plans, identical wait & trip — weights treat them identically  \n"
+                f"- `{flex['tied_differing']}` tied plans differing in wait/trip — the only weight-active case"
+            )
+            st.caption(
+                "Computed live from this scenario. Weights re-rank plans only within ties; "
+                "with no tie that differs in wait/trip, every weight yields the same schedule. "
+                "Full analysis: ARCHITECTURE.md § Weight sensitivity."
+            )
 
         st.subheader("Stations")
         st_rows = [

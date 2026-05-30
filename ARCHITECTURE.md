@@ -240,3 +240,129 @@ Done. Three targeted edits; nothing else changes.
 6. **Greedy commitment** — once a bus is scheduled its slots are locked. A later bus cannot displace an earlier one. This makes the schedule deterministic and explainable.
 
 7. **All 5 scenario YAMLs use the same route definition** — segments, distances, and station IDs are duplicated across files for self-containedness. In production, a shared `route_config.yaml` referenced by each scenario would be cleaner, but adds indirection that isn't worth it for 5 scenarios.
+
+---
+
+## Weight sensitivity: a characterization of the supplied scenarios
+
+The scheduler weighs three tunable soft rules — `individual`, `operator`, and
+`overall` — in its cost function (`scheduler.py:172–195`). This section
+documents a measured property of the five supplied scenarios: **their schedules
+are invariant to all three soft-rule weights**, and establishes that this is a
+structural fact of the inputs rather than a defect in the scheduler. The
+operator weight is the assignment's focal case, so it is highlighted throughout,
+but the finding applies equally to all three.
+
+### 1. Design intent
+
+Each soft weight steers plan selection when the scheduler has flexibility:
+`individual` penalises a bus's own wait, `operator` penalises fleet imbalance,
+and `overall` penalises total trip time. They are tuned in one place — the
+`weights` block of each scenario YAML — and read once (`scheduler.py:316`). The
+hooks are implemented and live; this section is about when they have leverage.
+
+### 2. Observed behaviour
+
+Sweeping each weight independently over {0, 0.5, 1, 2, 5, 10} (operator also to
+100), holding the others at 1.0, every scenario produces exactly **one distinct
+schedule** — identical charging plans, arrival times, waits, and per-station
+ordering at every weight value.
+
+| Scenario | distinct schedules (individual / operator / overall sweeps) |
+|---|---|
+| 1 — Even Spacing | 1 / 1 / 1 |
+| 2 — Bunched Start | 1 / 1 / 1 |
+| 3 — Asymmetric Load | 1 / 1 / 1 |
+| 4 — Operator Heavy | 1 / 1 / 1 |
+| 5 — Worst Case Convergence | 1 / 1 / 1 |
+
+### 3. Why: the invariance is structural (audit, not assertion)
+
+The result is a property of the inputs, established two ways.
+
+**Exhaustive per-decision audit.** For each of the 94 bus decisions, every
+feasible plan and its cost are enumerated. Each decision's cost-**optimal** plan
+is either:
+
+| | count |
+|---|---|
+| a single optimal plan (no equal-cost alternative) | 82 / 94 |
+| tied optimal plans, **identical in both wait and trip** | 12 / 94 |
+| tied optimal plans differing in wait or trip | **0 / 94** |
+
+(Each bus still has several *feasible* plans — up to 8 — but only these are
+cost-optimal.) The three soft scores are all functions of `(wait, trip)`; the
+operator score additionally uses `op_avg`, which is constant across a single
+bus's plans (`operator_stats` updates only after commit, `scheduler.py:396`).
+Plans identical in `(wait, trip)` therefore score identically under all three
+terms at any weights, so no weight can break these ties. With no decision
+offering a cost-optimal alternative that the weights could distinguish, the
+schedule cannot change. This holds for **all three soft-rule weights**, not the
+operator weight alone.
+
+**Weight sweep (corroboration).** Sweeping each weight independently over
+{0, 0.5, 1, 2, 5, 10} (operator also to 100), holding the others at 1.0, yields
+exactly one distinct schedule per scenario — consistent with the audit across
+the tested range.
+
+The structural cause is the 240 km range on a symmetric 100/120/100/120/100
+route with one charger per station: nearly every bus has one cost-optimal
+charging plan, and the few ties are between plans identical in wait and trip.
+
+Both the audit and the sweep are reproducible via
+`experiments/weight_sensitivity.py`.
+
+### 4. The mechanism is correct — a boundary test
+
+`tests/test_operator_weight.py` constructs a minimal scenario with genuine
+flexibility: a 360 km route within a 240 km range where one bus can either make
+a **single** charging stop (least charging time, but its charger is briefly
+occupied by another bus, forcing a ~10 min wait) or make **two** stops (no wait,
+but 25 min more charging). At a low operator weight the lower-trip single-stop
+plan wins; raising the operator weight — which penalises wait — flips the choice
+to the zero-wait two-stop plan, and the test asserts this change. The weighting
+machinery works as intended; the supplied scenarios simply never present the
+"tied plans differing in wait/trip" case that activates it.
+
+### 5. Alternatives tested and rejected
+
+Two ways of forcing the weights to influence the supplied scenarios were
+prototyped and measured against the stable departure-order scheduler:
+
+- **Charger-queue reordering by operator (catch-up priority).** Non-monotone in
+  the weight and not defensible: on Scenario 2 the per-operator wait spread
+  improves at a moderate weight (2.2 → 1.1 min at `operator = 3`) but worsens
+  sharply at a high weight (→ 12.6 min at `operator = 10`), while total wait
+  rises from 310 to 366 min. A fairness control that degrades fairness when
+  increased is worse than no control.
+- **Dynamic minimum-wait selection (reordering commits within a window).**
+  Degrades throughput: total wait rises 394 → 506 min on Scenario 5 (+28%) and
+  310 → 422 min on Scenario 2 (+36%).
+
+Conclusion: the existing departure-order scheduler is throughput-optimal on
+these inputs, and no reordering improves fairness without an unacceptable or
+non-monotone cost. The scheduler is left unchanged. Both probes are reproducible
+via `experiments/weight_sensitivity.py`.
+
+### 6. If operator fairness became a primary objective
+
+Two concrete evolution paths, in increasing cost:
+
+- **Cross-operator score (~6 lines, no engine change).** Replace the
+  self-referential operator term with one that compares against the worst-off
+  fleet, so it can diverge from the individual term when flexibility exists:
+
+  ```python
+  # scheduler.py — operator score becomes cross-operator
+  others = [d["total"] / d["count"] for o, d in operator_stats.items()
+            if d["count"] > 0 and o != timeline.bus.operator]
+  best_off = min(others) if others else 0.0
+  projected_avg = (op_data["total"] + timeline.total_wait_min) / (op_data["count"] + 1)
+  score_operator = max(0.0, projected_avg - best_off)   # protect the worst-off fleet
+  ```
+
+- **Global assignment (engine change).** Model bus → charger-slot allocation as
+  a min-cost flow or ILP with a fleet-fairness objective. This finds globally
+  balanced assignments the greedy cannot, at the cost of a solver dependency and
+  reduced step-by-step explainability — justified only if operator fairness
+  becomes a first-class optimisation target rather than a soft tie-breaker.
