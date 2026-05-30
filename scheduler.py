@@ -152,7 +152,7 @@ def enumerate_valid_plans(bus: Bus, route: Route, battery_range: float) -> list[
 
 def compute_cost(
     timeline: BusTimeline,
-    operator_wait_totals: dict[str, float],
+    operator_stats: dict[str, dict],
     weights: dict[str, float],
 ) -> float:
     """
@@ -160,9 +160,9 @@ def compute_cost(
 
     Soft rules (all additive, each scaled by its weight):
       individual : total wait time for this bus
-      operator   : std dev of wait totals across this operator's buses so far
-                   (we use the marginal increase from adding this bus's wait)
-      overall    : this bus's total trip duration beyond theoretical minimum
+      operator   : how much this bus's wait exceeds its operator's current average
+                   (penalises making one operator's fleet wait more than others)
+      overall    : this bus's total trip duration
 
     To add a new soft rule:
       1. Write a score_<name>(bus, timeline, ...) -> float function
@@ -176,19 +176,17 @@ def compute_cost(
     # Individual: penalise total wait
     score_individual = timeline.total_wait_min
 
-    # Operator: penalise how much this bus's wait diverges from its peers
+    # Operator: penalise excess wait above this operator's running average.
+    # operator_stats[op] = {"total": float, "count": int}
     op = timeline.bus.operator
-    existing = operator_wait_totals.get(op, 0.0)
-    # simple proxy: squared difference from running mean would require history;
-    # use absolute deviation from current operator average instead
-    count = sum(1 for k, v in operator_wait_totals.items() if k == op)
-    avg = (existing / count) if count > 0 else 0.0
-    score_operator = abs(timeline.total_wait_min - avg)
+    op_data = operator_stats.get(op, {"total": 0.0, "count": 0})
+    op_avg = op_data["total"] / op_data["count"] if op_data["count"] > 0 else 0.0
+    # Positive when this bus waits more than operator's average; negative is clamped to 0
+    # so under-average waits aren't penalised (they improve the fleet).
+    score_operator = max(0.0, timeline.total_wait_min - op_avg)
 
-    # Overall: total trip time vs theoretical minimum (no waits)
-    trip_duration = timeline.arrival_min - timeline.departure_min
-    # theoretical: travel time only (no waits, minimum charges)
-    score_overall = trip_duration
+    # Overall: total trip duration
+    score_overall = timeline.arrival_min - timeline.departure_min
 
     return (
         w_ind * score_individual
@@ -334,7 +332,8 @@ def run_scheduler(scenario: dict[str, Any]) -> list[BusTimeline]:
 
     # --- Schedule each bus ---
     timelines: list[BusTimeline] = []
-    operator_wait_totals: dict[str, float] = {}
+    # operator_stats[op] = {"total": cumulative_wait_min, "count": buses_scheduled}
+    operator_stats: dict[str, dict] = {}
 
     for bus in buses:
         plans = enumerate_valid_plans(bus, route, battery_range)
@@ -365,7 +364,7 @@ def run_scheduler(scenario: dict[str, Any]) -> list[BusTimeline]:
                 departure_min=bus.departure_min,
                 arrival_min=arrival,
             )
-            cost = compute_cost(tl, operator_wait_totals, weights)
+            cost = compute_cost(tl, operator_stats, weights)
             if cost < best_cost:
                 best_cost = cost
                 best_timeline = tl
@@ -394,11 +393,13 @@ def run_scheduler(scenario: dict[str, Any]) -> list[BusTimeline]:
                 # happen since allocate_slots already found a free slot)
                 charger_slots[0].append((start, end))
 
-        # Update operator running totals
+        # Update operator running stats
         op = bus.operator
-        operator_wait_totals[op] = (
-            operator_wait_totals.get(op, 0.0) + best_timeline.total_wait_min
-        )
+        prev = operator_stats.get(op, {"total": 0.0, "count": 0})
+        operator_stats[op] = {
+            "total": prev["total"] + best_timeline.total_wait_min,
+            "count": prev["count"] + 1,
+        }
 
         timelines.append(best_timeline)
 
