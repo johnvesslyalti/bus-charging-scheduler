@@ -1,0 +1,102 @@
+meta:
+  id: 3
+  name: "Scenario 3 — Asymmetric Load"
+  description: "10 BK buses (15 min spacing), only 4 KB buses. Tests handling of uneven traffic."
+
+route:
+  origin: "Bengaluru"
+  destination: "Kochi"
+  segments:
+    - from: "Bengaluru"
+      to: "A"
+      distance_km: 100
+    - from: "A"
+      to: "B"
+      distance_km: 120
+    - from: "B"
+      to: "C"
+      distance_km: 100
+    - from: "C"
+      to: "D"
+      distance_km: 120
+    - from: "D"
+      to: "Kochi"
+      distance_km: 100
+
+stations:
+  - id: "A"
+    chargers: 1
+  - id: "B"
+    chargers: 1
+  - id: "C"
+    chargers: 1
+  - id: "D"
+    chargers: 1
+
+physics:
+  battery_range_km: 240
+  charge_duration_min: 25
+  speed_kmh: 60
+
+weights:
+  individual: 1.0
+  operator: 1.0
+  overall: 1.0
+
+buses:
+  - id: "bus-BK-01"
+    operator: "kpn"
+    direction: "BK"
+    departure: "19:00"
+  - id: "bus-BK-02"
+    operator: "freshbus"
+    direction: "BK"
+    departure: "19:15"
+  - id: "bus-BK-03"
+    operator: "flixbus"
+    direction: "BK"
+    departure: "19:30"
+  - id: "bus-BK-04"
+    operator: "kpn"
+    direction: "BK"
+    departure: "19:45"
+  - id: "bus-BK-05"
+    operator: "freshbus"
+    direction: "BK"
+    departure: "20:00"
+  - id: "bus-BK-06"
+    operator: "flixbus"
+    direction: "BK"
+    departure: "20:15"
+  - id: "bus-BK-07"
+    operator: "kpn"
+    direction: "BK"
+    departure: "20:30"
+  - id: "bus-BK-08"
+    operator: "freshbus"
+    direction: "BK"
+    departure: "20:45"
+  - id: "bus-BK-09"
+    operator: "flixbus"
+    direction: "BK"
+    departure: "21:00"
+  - id: "bus-BK-10"
+    operator: "kpn"
+    direction: "BK"
+    departure: "21:15"
+  - id: "bus-KB-01"
+    operator: "freshbus"
+    direction: "KB"
+    departure: "19:00"
+  - id: "bus-KB-02"
+    operator: "flixbus"
+    direction: "KB"
+    departure: "19:35"
+  - id: "bus-KB-03"
+    operator: "kpn"
+    direction: "KB"
+    departure: "20:10"
+  - id: "bus-KB-04"
+    operator: "freshbus"
+    direction: "KB"
+    departure: "20:45"
