@@ -165,6 +165,33 @@ with tab_buses:
     summary_df = pd.DataFrame(summary_rows)
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
+    # ── Per-operator fairness summary ──────────────────────────────────────
+    st.divider()
+    st.subheader("Per-Operator Wait Summary")
+    st.caption(
+        "How wait time distributes across each operator's fleet. The `operator` "
+        "weight steers the scheduler toward balancing these figures when there is "
+        "flexibility (multiple equally-good charging plans or charger-order choices)."
+    )
+
+    op_groups: dict[str, list] = {}
+    for tl in timelines:
+        op_groups.setdefault(tl.bus.operator, []).append(tl)
+
+    op_rows = []
+    for op, tls in sorted(op_groups.items()):
+        waits = [t.total_wait_min for t in tls]
+        trips = [t.arrival_min - t.departure_min for t in tls]
+        op_rows.append({
+            "Operator": op,
+            "Buses": len(tls),
+            "Avg Wait (min)": round(sum(waits) / len(waits), 1),
+            "Max Wait (min)": round(max(waits), 1),
+            "Total Wait (min)": round(sum(waits), 1),
+            "Avg Trip (min)": round(sum(trips) / len(trips), 1),
+        })
+    st.dataframe(pd.DataFrame(op_rows), use_container_width=True, hide_index=True)
+
     st.divider()
     st.subheader("Detailed Stop Breakdown")
 

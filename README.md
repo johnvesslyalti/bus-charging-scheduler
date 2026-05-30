@@ -4,7 +4,9 @@ A Python + Streamlit app that schedules electric bus charging across 4 intermedi
 
 ## Live app
 
-> Hosted on Streamlit Community Cloud — link goes here after deployment
+**https://bus-charging-scheduler-gxdtsbk3d92yqpeqchkcqk.streamlit.app**
+
+Hosted on Streamlit Community Cloud — pick any of the 5 scenarios from the dropdown.
 
 ## Run locally
 
